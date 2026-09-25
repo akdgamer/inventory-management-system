@@ -11,7 +11,7 @@ export default function ItemForm() {
 
   const [form, setForm] = useState({
     sku: '', name: '', description: '',
-    quantity: 0, min_threshold: 0,
+    quantity: 0, min_threshold: 0, price: 0,
     category_id: '', supplier_id: '',
     image: ''
   });
@@ -30,6 +30,7 @@ export default function ItemForm() {
             description: data.description || '',
             quantity: data.quantity,
             min_threshold: data.min_threshold,
+            price: data.price ?? 0,
             category_id: data.category?.id || '',
             supplier_id: data.supplier?.id || '',
             image: data.image || ''
@@ -88,6 +89,8 @@ export default function ItemForm() {
           // Convert numeric fields
           if (key === 'quantity' || key === 'min_threshold') {
             acc[key] = parseInt(value, 10);
+          } else if (key === 'price') {
+            acc[key] = parseFloat(value);
           } else {
             acc[key] = value;
           }
@@ -187,8 +190,8 @@ export default function ItemForm() {
               />
             </div>
 
-            {/* Quantity and Min Threshold */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Quantity, Min Threshold and Unit Price */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-200 mb-2">
                   Quantity
@@ -214,6 +217,21 @@ export default function ItemForm() {
                   onChange={handleChange}
                   required
                   min="0"
+                  className="w-full px-4 py-2 bg-white bg-opacity-10 border border-white border-opacity-20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-200 mb-2">
+                  Unit Price (₹)
+                </label>
+                <input
+                  type="number"
+                  name="price"
+                  value={form.price}
+                  onChange={handleChange}
+                  required
+                  min="0"
+                  step="0.01"
                   className="w-full px-4 py-2 bg-white bg-opacity-10 border border-white border-opacity-20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
