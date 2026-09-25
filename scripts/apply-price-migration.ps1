@@ -1,0 +1,233 @@
+# Applies the item.price migration to the live IMS database.
+#
+# Run this ONCE, from an elevated PowerShell, AFTER the Phase 1 code changes are
+# present on this machine. Code and schema must land together: the model declares
+# a price column, so the API will error on every item query until this has run.
+#
+# The script stops the backend, backs up, migrates, then restarts. It aborts on
+# the first failure and refuses to continue past the confirmation gate in [1/5].
+#
+# Rollback:
+#   .\.venv\Scripts\python.exe -m alembic downgrade -1     # drops the column
+#   pg_restore -d <db> --clean backups\ims_db-<stamp>.dump # full restore
+#
+# The baseline revision is deliberately EMPTY. It marks where Alembic starts
+# tracking; the existing schema was built by Base.metadata.create_all() and is
+# left exactly as it is. Alembic cannot build this database from zero -- that is
+# unchanged from today's behaviour -- but every future schema change now gets a
+# real migration.
+
+$ErrorActionPreference = 'Stop'
+
+$principalCheck = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principalCheck.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "ERROR: This script must be run as Administrator." -ForegroundColor Red
+    exit 1
+}
+
+$root     = 'C:\InventoryManagement\ims-backend'
+$python   = "$root\.venv\Scripts\python.exe"
+$pgBin    = 'C:\PostgreSQL\14\bin'
+$backups  = 'C:\InventoryManagement\backups'
+$versions = "$root\alembic\versions"
+
+function Assert-LastExit($what) {
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: $what failed (exit $LASTEXITCODE). Aborting." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ------------------------------------------------------- [1/5] identify the DB --
+# Three connection strings disagree across database.py, alembic.ini and .env.
+# We ask the application itself which one it resolves, because that is by
+# definition the database serving the UI.
+Write-Host "`n[1/5] Identifying the live database" -ForegroundColor Cyan
+
+Push-Location $root
+
+# The model must already declare price: code and schema land together, and the
+# migration below exists to make the database match the code on this machine.
+$hasPrice = & $python -c "from app.models import Item; print('price' in Item.__table__.c)"
+Assert-LastExit "inspecting the Item model"
+if ($hasPrice.Trim() -ne 'True') {
+    Write-Host "ERROR: app/models.py does not declare a price column." -ForegroundColor Red
+    Write-Host "       Deploy the Phase 1 code changes to this machine first." -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
+
+$dbUrl = & $python -c "from app.database import DATABASE_URL; print(DATABASE_URL)"
+Assert-LastExit "resolving DATABASE_URL"
+Pop-Location
+
+# psql and pg_dump speak libpq URLs; strip the SQLAlchemy driver suffix.
+$libpqUrl = $dbUrl -replace '\+psycopg2', ''
+# Mask the password before showing it on screen.
+$shown = $libpqUrl -replace '://([^:/@]+):[^@]*@', '://$1:****@'
+
+Write-Host "  application resolves: $shown"
+
+$itemCount = (& "$pgBin\psql.exe" $libpqUrl -t -A -c "SELECT COUNT(*) FROM item;").Trim()
+Assert-LastExit "querying item count"
+Write-Host "  items in that database: $itemCount"
+
+if ([int]$itemCount -eq 0) {
+    Write-Host "ERROR: that database has no items. It is almost certainly not the" -ForegroundColor Red
+    Write-Host "       live one. Resolve the connection-string mismatch first." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "`n  Confirm this is the live inventory database." -ForegroundColor Yellow
+$answer = Read-Host "  Type YES to continue"
+if ($answer -ne 'YES') { Write-Host "  Aborted by operator."; exit 1 }
+
+# ------------------------------------------------------------- [2/5] back up --
+Write-Host "`n[2/5] Backing up" -ForegroundColor Cyan
+
+New-Item -ItemType Directory -Path $backups -Force | Out-Null
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$dump  = "$backups\ims_db-$stamp.dump"
+
+& "$pgBin\pg_dump.exe" $libpqUrl -F c -f $dump
+Assert-LastExit "pg_dump"
+
+$size = (Get-Item $dump).Length
+Write-Host ("  wrote {0} ({1:N0} bytes)" -f $dump, $size)
+if ($size -lt 10000) {
+    Write-Host "ERROR: dump is suspiciously small. Aborting before migrating." -ForegroundColor Red
+    exit 1
+}
+
+# --------------------------------------------------- [3/5] stop the backend --
+# Nothing should write to the table while the column is added.
+Write-Host "`n[3/5] Stopping the backend" -ForegroundColor Cyan
+Stop-ScheduledTask -TaskName 'IMS Backend' -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'uvicorn' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Write-Host "  stopped"
+
+# ------------------------------------------------ [4/5] write and run migration --
+# Both revisions are written directly with fixed ids rather than autogenerated.
+# Autogenerate would read the already-updated models and put `price` into the
+# baseline's CREATE TABLE, which would then collide with the add_column below on
+# any from-scratch rebuild.
+Write-Host "`n[4/5] Applying the migration" -ForegroundColor Cyan
+
+New-Item -ItemType Directory -Path $versions -Force | Out-Null
+
+$baselineFile = "$versions\baseline01_baseline.py"
+if (-not (Test-Path $baselineFile)) {
+@'
+"""baseline - marks where Alembic begins tracking
+
+The schema in place at this point was created by Base.metadata.create_all().
+This revision intentionally does nothing.
+
+Revision ID: baseline01
+Revises:
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = 'baseline01'
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    pass
+
+
+def downgrade() -> None:
+    pass
+'@ | Out-File -FilePath $baselineFile -Encoding utf8
+    Write-Host "  wrote baseline01"
+}
+
+$priceFile = "$versions\price0001_add_price_to_item.py"
+if (-not (Test-Path $priceFile)) {
+@'
+"""add price to item
+
+Revision ID: price0001
+Revises: baseline01
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = 'price0001'
+down_revision = 'baseline01'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        'item',
+        sa.Column('price', sa.Numeric(10, 2), nullable=False, server_default='0'),
+    )
+
+
+def downgrade() -> None:
+    op.drop_column('item', 'price')
+'@ | Out-File -FilePath $priceFile -Encoding utf8
+    Write-Host "  wrote price0001"
+}
+
+Push-Location $root
+
+# Mark the live database as already at the baseline WITHOUT executing it.
+& $python -m alembic stamp baseline01
+Assert-LastExit "alembic stamp"
+Write-Host "  stamped at baseline01"
+
+& $python -m alembic upgrade head
+Assert-LastExit "alembic upgrade"
+
+$current = & $python -m alembic current 2>&1 | Select-String 'price0001'
+Pop-Location
+
+if (-not $current) {
+    Write-Host "ERROR: alembic current does not report price0001. Aborting." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  upgraded to price0001"
+
+# Verify against the database itself, not just Alembic's own bookkeeping.
+$nulls = (& "$pgBin\psql.exe" $libpqUrl -t -A -c "SELECT COUNT(*) FROM item WHERE price IS NULL;").Trim()
+Assert-LastExit "null check"
+if ([int]$nulls -ne 0) {
+    Write-Host "ERROR: $nulls rows have a NULL price. Expected 0." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  all $itemCount rows backfilled, 0 nulls"
+
+# ------------------------------------------------------------- [5/5] restart --
+Write-Host "`n[5/5] Restarting services" -ForegroundColor Cyan
+Start-ScheduledTask -TaskName 'IMS Backend'
+Start-ScheduledTask -TaskName 'IMS Frontend'
+Start-Sleep -Seconds 12
+
+try {
+    $ping = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/' -TimeoutSec 10
+    Write-Host ("  API: " + $ping.message)
+} catch {
+    Write-Host "  WARNING: API did not answer yet. Check logs\backend.err.log" -ForegroundColor Yellow
+}
+
+$total = & "$pgBin\psql.exe" $libpqUrl -t -A -c "SELECT COALESCE(SUM(quantity * price), 0) FROM item;"
+Write-Host "`nDone." -ForegroundColor Green
+Write-Host "Backup:  $dump"
+Write-Host "DB total inventory value: $total"
+Write-Host ""
+Write-Host "Now verify in the browser at http://localhost:5173/ :" -ForegroundColor Cyan
+Write-Host "  1. An item detail page shows Unit Price and Total Value as INR 0.00 (not `$0.00, not NaN)"
+Write-Host "  2. Edit an item, set price 125.50, save, reload -- it persists"
+Write-Host "  3. That item's Total Value equals 125.50 x its quantity"
+Write-Host "  4. The dashboard's Total Inventory Value matches the figure printed above"
+Write-Host "  5. Saving a price of -10 is rejected"
