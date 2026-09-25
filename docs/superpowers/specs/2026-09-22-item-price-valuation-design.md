@@ -1,0 +1,182 @@
+# Item Price & Inventory Valuation — Design
+
+**Date:** 2026-09-22
+**Status:** Approved, ready for implementation planning
+**Scope:** Feature A only. Currency selection and live FX conversion are deferred to a separate spec (Feature B).
+
+## Problem
+
+Items have no cost field. The operator wants to record what each product cost, see the
+value of a single item (quantity x price), and see total inventory value on the dashboard.
+
+## Key discovery
+
+The frontend is already ~80% built for this, against a field named `price` that the
+backend never had:
+
+- `ims-frontend/src/pages/Dashboard.jsx:29` already reduces `quantity * (item.price || 0)`
+  into `totalValue`. The "Total Value" tile (lines 103-116) is fully written and styled,
+  but **commented out**.
+- `ims-frontend/src/pages/ItemDetails.jsx:164-171` is **live in production right now** and
+  renders "Unit Price" and "Total Value". Both display $0.00 for every item because
+  `item.price` is `undefined` in every API response.
+- The backend has zero references to `price` or `cost`.
+
+This is therefore primarily a backend change plus one form input, not a new feature.
+
+## Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Field semantics | Single `price` column = unit purchase cost | Matches the name the frontend already expects; no relabeling needed |
+| Storage type | `Numeric(10, 2)`, `NOT NULL DEFAULT 0` | Exact decimal for money; default backfills 550 existing rows with 0 and removes all NULL handling |
+| Transport type | Pydantic field typed `float` | See "Decimal serialization" below |
+| Schema migration | Bootstrap Alembic properly | Chosen over a one-off ALTER so future schema changes have a real path |
+| Currency | INR, display-only | Prices stored in INR always; Feature B converts for display only |
+| Valuation computed | Client-side, as it already is | Dashboard already fetches all items for Recent Activity, so the data is present; a stats endpoint would not save the round trip without further change. Fine at 550 items |
+| Verification | Manual checklist | Project has no test harness (no pytest, no vitest); introducing one is disproportionate to a one-column feature |
+
+## Pre-flight: confirm the live database
+
+Three different connection strings exist and they disagree:
+
+- `ims-backend/app/database.py:9` default: `postgresql+psycopg2://ims-user:PASSWORD@localhost/ims_db` (**hyphen**)
+- `ims-backend/alembic.ini`: `postgresql+psycopg2://ims_user:PASSWORD@localhost/ims_db` (**underscore**)
+- `ims-backend/.env`: a third value
+
+Nothing in the application calls `load_dotenv()`, and `scripts/start-backend.ps1` does not
+source `.env`, so the running application is most likely using the `database.py` default.
+
+**This must be resolved before any migration runs.** Migrating the wrong database would
+leave the live app unchanged and silently create a `price` column somewhere else.
+Confirm by querying the running instance's actual connection, e.g. via
+`SELECT current_database(), current_user;` on a session opened with the app's own settings,
+or by inspecting the active backend process environment on the Windows box.
+
+## Data model
+
+Add to `Item` in `ims-backend/app/models.py`:
+
+```python
+price = Column(Numeric(10, 2), nullable=False, server_default=text("0"))
+```
+
+Requires importing `Numeric` and `text` from sqlalchemy. Max representable value is
+99,999,999.99, which is ample for unit cost.
+
+### Decimal serialization (important)
+
+SQLAlchemy returns `decimal.Decimal` for `Numeric` columns, and Pydantic v2 serializes
+`Decimal` to a JSON **string** by default. The frontend calls `item.price?.toFixed(2)`;
+strings have no `.toFixed`, so this would break at runtime.
+
+Resolution: keep `Numeric(10,2)` in the database (exact storage) but type the **Pydantic**
+field as `float`, so responses carry a JSON number. At two decimal places for unit cost,
+float transport is safe.
+
+## Alembic bootstrap
+
+Current state: `alembic/versions/` does not exist, and `alembic/env.py` is stock with
+`target_metadata = None` — autogenerate against it would emit an empty migration.
+
+Steps, in this exact order:
+
+1. Create `ims-backend/alembic/versions/`
+2. `env.py`: set `target_metadata = Base.metadata`, importing `app.models` so all tables
+   are registered on the metadata before autogenerate runs
+3. `env.py`: read the connection URL from the `DATABASE_URL` environment variable, falling
+   back to the ini value — this resolves the three-way mismatch in one place
+4. `alembic revision --autogenerate -m "baseline existing schema"` — then **review the
+   generated file by hand** before proceeding
+5. `alembic stamp head` — **critical.** This marks the live database as already at the
+   baseline revision *without executing it*. Running `upgrade` at this point would attempt
+   CREATE TABLE against existing tables and fail.
+6. `alembic revision -m "add price to item"` — hand-written, containing a single
+   `op.add_column` / `op.drop_column` pair. Not autogenerated; a one-column change is
+   safer written explicitly.
+7. `alembic upgrade head` — applies only the price migration
+
+## API changes
+
+`ims-backend/app/schemas.py`:
+
+- `ItemBase`: add `price: float = Field(0, ge=0)`. The default keeps existing clients
+  working; `ge=0` rejects negative cost.
+- `ItemUpdate`: add `price: Optional[float] = Field(None, ge=0)`
+- `ItemSchema` inherits from `ItemBase`, so `price` appears in all item responses with no
+  further change.
+
+`ims-backend/app/routers/items.py`:
+
+- `create_item` builds its `item_data` dict explicitly rather than splatting the model, so
+  it needs `"price": item_in.price` added.
+- `update_item` uses `item_in.dict(exclude_unset=True, exclude={'image'})` with a setattr
+  loop, so price flows through with **no change required**.
+
+No new endpoints.
+
+## Frontend changes
+
+### `src/utils/currency.js` (new)
+
+Wraps `Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' })` and exports a
+single `formatMoney(value)`.
+
+Two reasons this module earns its place rather than inlining the symbol:
+`Intl` produces correct Indian lakh/crore digit grouping (₹1,23,456.00), which a bare
+`toLocaleString()` will not; and it confines the currency to one file, so Feature B becomes
+a change to this module plus a rate lookup instead of hunting symbols across the codebase.
+It must coerce non-numeric input to 0 so items with no price render cleanly.
+
+### `src/pages/ItemForm.jsx`
+
+- Add `price: 0` to initial form state (line ~14)
+- Map `price` when loading an existing item for edit (line ~31)
+- **Add a `parseFloat` branch to the coercion block at line 89.** The existing block only
+  int-coerces `quantity` and `min_threshold`; without a float branch, price is submitted as
+  a string.
+- Add a `type="number" step="0.01" min="0"` input alongside quantity and min_threshold
+
+### `src/pages/Dashboard.jsx`
+
+- Uncomment the Total Value tile (lines 103-116)
+- Format via `formatMoney`
+- The grid is already `md:grid-cols-3` with two live tiles, so the third requires **no
+  layout change**
+
+### `src/pages/ItemDetails.jsx`
+
+- Lines 165 and 170 already render Unit Price and Total Value. Only the formatting call
+  changes. No structural change.
+
+## Deployment (Windows)
+
+0. **Take a fresh `pg_dump` first.** The only existing backup is
+   `backups/ims_db-20260720-170024.sql` from 2026-07-20, and this is a schema change
+   against live data.
+1. Stop the `IMS Backend` scheduled task
+2. Run the Alembic steps from the `ims-backend` directory using
+   `.venv\Scripts\python.exe -m alembic ...`
+3. Restart both `IMS Backend` and `IMS Frontend` tasks
+
+No `npm run build` step: the deployment serves the Vite dev server as production
+(see `scripts/start-frontend.ps1`).
+
+## Verification checklist
+
+- `\d item` in psql shows `price | numeric(10,2) | not null default 0`
+- `alembic current` reports the "add price to item" revision
+- Existing items load in the UI and show ₹0.00 rather than erroring
+- Editing an item to price 125.50 and saving persists across a reload
+- ItemDetails "Total Value" equals 125.50 x that item's quantity
+- **Dashboard total matches `SELECT SUM(quantity * price) FROM item;` executed directly in
+  psql** — this is the authoritative check
+- An attempt to save a negative price is rejected by the API
+
+## Out of scope
+
+Deferred to Feature B (separate spec): currency selection UI, live FX rate fetching,
+rate caching, fallback behaviour when the rate API is unreachable, and display conversion.
+
+Not included, not requested: a price column on the Items list page; cost-vs-sale-price
+margin tracking; historical cost/valuation over time.

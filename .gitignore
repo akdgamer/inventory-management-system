@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Secrets and local config
+.env
+
+# Runtime artefacts — not source
+ims-backend/media/
+logs/
+backups/
