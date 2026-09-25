@@ -1,11 +1,25 @@
 # database.py
+from pathlib import Path
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Database URL: defaults to docker-compose service
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://ims-user:PASSWORD@localhost/ims_db")
+# Load ims-backend/.env by absolute path rather than relying on the working
+# directory, so the app and Alembic resolve the same file however they are
+# launched. .env is git-ignored and holds the real credentials.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# No hardcoded fallback: a missing DATABASE_URL should fail loudly here rather
+# than silently connecting to the wrong database.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Copy ims-backend/.env.example to "
+        "ims-backend/.env and fill in your connection string."
+    )
 
 # Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
