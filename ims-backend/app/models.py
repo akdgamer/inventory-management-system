@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Table, DateTime, Text
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Table, DateTime, Text, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 import uuid
@@ -82,6 +82,7 @@ class Item(Base):
     description = Column(Text)
     quantity = Column(Integer, nullable=False, default=0)
     min_threshold = Column(Integer, nullable=False, default=0)
+    price = Column(Numeric(10, 2), nullable=False, server_default="0")
     image_url = Column(String)
     category_id = Column(Integer, ForeignKey('category.id'))
     supplier_id = Column(Integer, ForeignKey('supplier.id'))
