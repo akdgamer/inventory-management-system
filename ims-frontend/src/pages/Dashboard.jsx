@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Package, AlertTriangle, DollarSign, TrendingUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { formatMoney } from '../utils/currency';
 
 export default function Dashboard() {
   const { fetchWithAuth, isAuthenticated, isLoading } = useAuth();
@@ -101,20 +102,20 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Total Value */}
-            {/* <div className="backdrop-blur-xl bg-white bg-opacity-5 border border-white border-opacity-20 rounded-xl p-6">
+            {/* Total Inventory Value */}
+            <div className="backdrop-blur-xl bg-white bg-opacity-5 border border-white border-opacity-20 rounded-xl p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-gray-400 text-sm">Total Value</p>
+                  <p className="text-gray-400 text-sm">Total Inventory Value</p>
                   <p className="text-3xl font-bold text-white mt-2">
-                    ${metrics.totalValue.toLocaleString()}
+                    {formatMoney(metrics.totalValue)}
                   </p>
                 </div>
                 <div className="p-3 bg-green-500 bg-opacity-20 rounded-lg">
                   <DollarSign className="w-6 h-6 text-green-400" />
                 </div>
               </div>
-            </div> */}
+            </div>
           </div>
 
           {/* Recent Activity */}

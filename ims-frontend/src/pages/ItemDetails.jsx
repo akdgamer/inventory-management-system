@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { formatMoney } from '../utils/currency';
 import { Edit, Trash2, ArrowLeft, Package, DollarSign, AlertTriangle, Tag, Building, Plus, Minus } from 'lucide-react';
 import TransactionHistory from '../components/TransactionHistory';
 import StockTransactionForm from '../components/StockTransactionForm';
@@ -162,12 +163,12 @@ export default function ItemDetails() {
                   </div>
                   <div>
                     <p className="text-gray-400 text-sm">Unit Price</p>
-                    <p className="text-white text-2xl font-bold">${item.price?.toFixed(2) || '0.00'}</p>
+                    <p className="text-white text-2xl font-bold">{formatMoney(item.price)}</p>
                   </div>
                   <div>
                     <p className="text-gray-400 text-sm">Total Value</p>
                     <p className="text-white text-2xl font-bold">
-                      ${((item.quantity || 0) * (item.price || 0)).toFixed(2)}
+                      {formatMoney((item.quantity || 0) * (item.price || 0))}
                     </p>
                   </div>
                 </div>
