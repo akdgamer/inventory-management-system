@@ -89,6 +89,7 @@ def create_item(
         "description": item_in.description,
         "quantity": item_in.quantity,
         "min_threshold": item_in.min_threshold,
+        "price": item_in.price,
         "last_updated_by": current_user.id
     }
 
