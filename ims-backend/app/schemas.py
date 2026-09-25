@@ -88,6 +88,7 @@ class ItemBase(BaseModel):
     description: Optional[str] = None
     quantity: int
     min_threshold: int
+    price: float = Field(0, ge=0)
     image_url: Optional[str] = None
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
@@ -100,6 +101,7 @@ class ItemUpdate(BaseModel):
     description: Optional[str] = None
     quantity: Optional[int] = None
     min_threshold: Optional[int] = None
+    price: Optional[float] = Field(None, ge=0)
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
     image: Optional[str] = None  # Base64 encoded image
