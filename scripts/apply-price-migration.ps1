@@ -189,7 +189,12 @@ Write-Host "  stamped at baseline01"
 & $python -m alembic upgrade head
 Assert-LastExit "alembic upgrade"
 
-$current = & $python -m alembic current 2>&1 | Select-String 'price0001'
+# Alembic logs INFO lines to stderr. Under 'Stop', PowerShell 5.1 turns
+# redirected native stderr into a terminating error, which would abort here --
+# after the migration succeeded but before the services are restarted.
+$ErrorActionPreference = 'Continue'
+$current = & $python -m alembic current 2>&1 | Out-String | Select-String 'price0001'
+$ErrorActionPreference = 'Stop'
 Pop-Location
 
 if (-not $current) {
