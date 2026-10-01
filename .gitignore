@@ -11,6 +11,9 @@ dist/
 # Secrets and local config
 .env
 
+# Local Claude Code settings (machine-specific, not shared)
+.claude/settings.local.json
+
 # Runtime artefacts — not source
 ims-backend/media/
 logs/
