@@ -18,6 +18,13 @@ Dates are in YYYY-MM-DD.
   `stats` path is not parsed as an id.
 - **Pagination UI on the Items page** — Previous/Next buttons, a "Showing X–Y
   of N items" summary, current/total page indicator, and an inline empty state.
+- **Stock-status filter and sort controls on the Items page.** `GET /items/`
+  now also accepts `stock_status` (`all` / `in_stock` / `low_stock`, where low
+  stock is quantity ≤ min threshold), `sort_by` (`updated_at` / `name` /
+  `quantity` / `price`) and `sort_dir` (`asc` / `desc`); invalid values are
+  rejected with 422. The UI adds an All / In Stock / Low Stock toggle and a
+  "Sort by" selector with a direction button. Filters reset to the first page
+  and combine with search.
 
 ### Changed
 - **Dashboard no longer downloads every item.** It reads the three headline
@@ -34,6 +41,10 @@ Dates are in YYYY-MM-DD.
   and dropped the caret. The full-screen loader now only shows while auth is
   initializing; per-fetch loading and errors render inline so the page and the
   search box stay mounted.
+- **`GET /users/` 500.** A legacy admin row had `created_at = NULL`, which made
+  the `List[UserSchema]` response fail validation. The NULL was back-filled in
+  the database and `created_at` / `last_login` are now optional in `UserSchema`,
+  so a missing audit timestamp degrades to null instead of erroring.
 
 ### Database / operations
 - The **item `price` migration has been applied** to the live database on the

@@ -20,6 +20,9 @@ export default function ItemsPage() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
+  const [stockStatus, setStockStatus] = useState("all");   // all | in_stock | low_stock
+  const [sortBy, setSortBy] = useState("updated_at");       // updated_at | name | quantity | price
+  const [sortDir, setSortDir] = useState("desc");           // asc | desc
 
   // Fetch a single page of items (most-recently-updated first). Only PAGE_SIZE
   // rows come down; `total` drives the pager.
@@ -30,6 +33,9 @@ export default function ItemsPage() {
         const params = new URLSearchParams({
           limit: PAGE_SIZE,
           offset: page * PAGE_SIZE,
+          stock_status: stockStatus,
+          sort_by: sortBy,
+          sort_dir: sortDir,
         });
         if (debouncedSearch) params.set("search", debouncedSearch);
         const data = await fetchWithAuth(`/items/?${params.toString()}`);
@@ -60,7 +66,7 @@ export default function ItemsPage() {
 
   useEffect(() => {
     fetchItems();
-  }, [isAuthenticated, isLoading, debouncedSearch, page]);
+  }, [isAuthenticated, isLoading, debouncedSearch, page, stockStatus, sortBy, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
@@ -154,6 +160,52 @@ export default function ItemsPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 bg-white bg-opacity-10 border border-white border-opacity-20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
               />
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-3 mb-6">
+            {/* Stock status */}
+            <div className="inline-flex rounded-lg overflow-hidden border border-white border-opacity-20">
+              {[
+                { key: "all", label: "All" },
+                { key: "in_stock", label: "In Stock" },
+                { key: "low_stock", label: "Low Stock" },
+              ].map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => { setStockStatus(opt.key); setPage(0); }}
+                  className={`px-4 py-2 text-sm transition ${
+                    stockStatus === opt.key
+                      ? "bg-purple-600 text-white"
+                      : "bg-white bg-opacity-5 text-gray-300 hover:bg-opacity-10"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Sort */}
+            <div className="flex items-center gap-2 sm:ml-auto">
+              <span className="text-sm text-gray-400">Sort by</span>
+              <select
+                value={sortBy}
+                onChange={(e) => { setSortBy(e.target.value); setPage(0); }}
+                className="px-3 py-2 bg-slate-800 border border-white border-opacity-20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+              >
+                <option value="updated_at">Recently updated</option>
+                <option value="name">Name</option>
+                <option value="quantity">Quantity</option>
+                <option value="price">Price</option>
+              </select>
+              <button
+                onClick={() => { setSortDir((d) => (d === "asc" ? "desc" : "asc")); setPage(0); }}
+                className="px-3 py-2 bg-white bg-opacity-10 border border-white border-opacity-20 rounded-lg text-white text-sm hover:bg-opacity-20 transition"
+                title={sortDir === "asc" ? "Ascending" : "Descending"}
+              >
+                {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
+              </button>
             </div>
           </div>
 
@@ -259,7 +311,9 @@ export default function ItemsPage() {
           )}
           {!loading && !error && items.length === 0 && (
             <div className="text-center text-gray-400 py-10">
-              {debouncedSearch ? "No items match your search." : "No items yet."}
+              {debouncedSearch || stockStatus !== "all"
+                ? "No items match your filters."
+                : "No items yet."}
             </div>
           )}
 

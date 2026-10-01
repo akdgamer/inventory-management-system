@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import List, Optional, Literal
 import shutil
 import os
 from app.database import get_db
@@ -29,28 +29,48 @@ def permission_required(permission_name: str):
         return current_user
     return checker
 
+# Columns the list endpoint is allowed to sort by (whitelist, so sort_by can't
+# inject arbitrary SQL).
+SORT_COLUMNS = {
+    "updated_at": Item.updated_at,
+    "name": Item.name,
+    "quantity": Item.quantity,
+    "price": Item.price,
+}
+
 @router.get("/", response_model=ItemListResponse)
 def list_items(
     search: Optional[str] = None,
+    stock_status: Literal["all", "in_stock", "low_stock"] = "all",
+    sort_by: Literal["updated_at", "name", "quantity", "price"] = "updated_at",
+    sort_dir: Literal["asc", "desc"] = "desc",
     limit: int = Query(20, ge=1, le=100, description="Max items per page"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    """Return one page of items, most-recently-updated first.
+    """Return one page of items.
 
-    Only `limit` rows are sent to the client; `total` is the full count of rows
-    matching the (optional) search, so the UI can show page controls without
-    fetching the whole table.
+    Filters: `search` (sku/name), `stock_status` (all/in_stock/low_stock, where
+    low stock is quantity <= min_threshold). Ordering: `sort_by` + `sort_dir`.
+    Only `limit` rows are sent; `total` is the full count matching the filters,
+    so the UI can page without fetching the whole table.
     """
     query = db.query(Item)
     if search:
         term = f"%{search}%"
         query = query.filter((Item.sku.ilike(term)) | (Item.name.ilike(term)))
+    if stock_status == "low_stock":
+        query = query.filter(Item.quantity <= Item.min_threshold)
+    elif stock_status == "in_stock":
+        query = query.filter(Item.quantity > Item.min_threshold)
 
     total = query.count()
+
+    sort_col = SORT_COLUMNS[sort_by]
+    ordering = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
     items = (
-        query.order_by(Item.updated_at.desc().nullslast(), Item.id.desc())
+        query.order_by(ordering.nullslast(), Item.id.desc())
         .offset(offset)
         .limit(limit)
         .all()
