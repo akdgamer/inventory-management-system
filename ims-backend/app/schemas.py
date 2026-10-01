@@ -114,6 +114,20 @@ class ItemSchema(ItemBase):
     class Config:
         from_attributes = True
 
+class ItemListResponse(BaseModel):
+    """A single page of items plus the total matching count, so the client can
+    render pagination controls without fetching every row."""
+    items: List[ItemSchema]
+    total: int
+    limit: int
+    offset: int
+
+class ItemStats(BaseModel):
+    """Inventory summary computed in the database, for the dashboard."""
+    total_items: int
+    low_stock_items: int
+    total_value: float
+
 # ----- Notification Schemas -----
 class NotificationBase(BaseModel):
     item_id: int

@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 import shutil
 import os
 from app.database import get_db
 from app.models import Item, InventoryTransaction
-from app.schemas import ItemCreate, ItemUpdate, ItemSchema, TransactionCreate, TransactionSchema
+from app.schemas import (
+    ItemCreate, ItemUpdate, ItemSchema, ItemListResponse, ItemStats,
+    TransactionCreate, TransactionSchema,
+)
 from app.services.auth_service import get_current_user
 import base64
 from datetime import datetime
@@ -25,17 +29,56 @@ def permission_required(permission_name: str):
         return current_user
     return checker
 
-@router.get("/", response_model=List[ItemSchema])
+@router.get("/", response_model=ItemListResponse)
 def list_items(
     search: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100, description="Max items per page"),
+    offset: int = Query(0, ge=0, description="Number of items to skip"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
+    """Return one page of items, most-recently-updated first.
+
+    Only `limit` rows are sent to the client; `total` is the full count of rows
+    matching the (optional) search, so the UI can show page controls without
+    fetching the whole table.
+    """
     query = db.query(Item)
     if search:
         term = f"%{search}%"
         query = query.filter((Item.sku.ilike(term)) | (Item.name.ilike(term)))
-    return query.all()
+
+    total = query.count()
+    items = (
+        query.order_by(Item.updated_at.desc().nullslast(), Item.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+@router.get("/stats", response_model=ItemStats)
+def item_stats(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """Inventory summary for the dashboard, aggregated in the database so the
+    client never has to download every item just to add up three numbers."""
+    total_items = db.query(func.count(Item.id)).scalar() or 0
+    low_stock_items = (
+        db.query(func.count(Item.id))
+        .filter(Item.quantity <= Item.min_threshold)
+        .scalar()
+        or 0
+    )
+    total_value = db.query(
+        func.coalesce(func.sum(Item.quantity * Item.price), 0)
+    ).scalar() or 0
+    return {
+        "total_items": total_items,
+        "low_stock_items": low_stock_items,
+        "total_value": float(total_value),
+    }
 
 @router.post("/", response_model=ItemSchema, dependencies=[Depends(permission_required("items.create"))])
 def create_item(
