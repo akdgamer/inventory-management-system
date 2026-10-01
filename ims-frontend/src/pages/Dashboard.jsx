@@ -22,18 +22,19 @@ export default function Dashboard() {
       if (!isLoading && isAuthenticated) {
         try {
           setLoading(true);
-          const items = await fetchWithAuth('/items/');
-          
-          // Calculate metrics
-          const totalItems = items.length;
-          const lowStockItems = items.filter(item => item.quantity <= item.min_threshold).length;
-          const totalValue = items.reduce((sum, item) => sum + (item.quantity * (item.price || 0)), 0);
+          // Metrics are aggregated in the database; recent activity is just the
+          // first page of items ordered by most-recently-updated. Neither call
+          // downloads the whole inventory.
+          const [stats, recent] = await Promise.all([
+            fetchWithAuth('/items/stats'),
+            fetchWithAuth('/items/?limit=5&offset=0'),
+          ]);
 
           setMetrics({
-            totalItems,
-            lowStockItems,
-            totalValue,
-            recentActivity: items.slice(0, 5) // Get 5 most recent items
+            totalItems: stats.total_items,
+            lowStockItems: stats.low_stock_items,
+            totalValue: stats.total_value,
+            recentActivity: recent.items,
           });
         } catch (error) {
           console.error('Failed to fetch dashboard data:', error);

@@ -4,25 +4,41 @@ import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import StockTransactionForm from "../components/StockTransactionForm";
 
+const PAGE_SIZE = 20;
+
 export default function ItemsPage() {
   const { fetchWithAuth, postWithAuth, putWithAuth, isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
 
   const [items, setItems] = useState([]);
-  const [search, setSearch] = useState("");
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");          // live value bound to the input
+  const [debouncedSearch, setDebouncedSearch] = useState(""); // what we actually query with
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
 
-  // Fetch items
+  // Fetch a single page of items (most-recently-updated first). Only PAGE_SIZE
+  // rows come down; `total` drives the pager.
   const fetchItems = async () => {
     if (!isLoading && isAuthenticated) {
       try {
         setLoading(true);
-        const data = await fetchWithAuth(`/items/?search=${search}`);
-        setItems(data);
+        const params = new URLSearchParams({
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+        });
+        if (debouncedSearch) params.set("search", debouncedSearch);
+        const data = await fetchWithAuth(`/items/?${params.toString()}`);
+        setItems(data.items);
+        setTotal(data.total);
+        // If this page ended up empty because rows were deleted, step back.
+        if (data.items.length === 0 && page > 0) {
+          setPage((p) => Math.max(0, p - 1));
+        }
       } catch (error) {
         console.error("Failed to fetch items:", error);
         setError("Failed to load items. Please try again later.");
@@ -32,22 +48,34 @@ export default function ItemsPage() {
     }
   };
 
+  // Debounce the search box: wait 300ms after the last keystroke, then query
+  // (and jump back to the first page). Typing no longer fires a request per key.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   useEffect(() => {
     fetchItems();
-  }, [isAuthenticated, isLoading, search]);
+  }, [isAuthenticated, isLoading, debouncedSearch, page]);
 
-  // Loading state
-  if (isLoading || loading) {
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(total, (page + 1) * PAGE_SIZE);
+
+  // Only block the page while auth is still initializing. A per-fetch loading
+  // state must NEVER unmount the page here: doing so tears down and recreates the
+  // search <input> on every keystroke, which is what was stealing focus. Fetch
+  // loading and errors are shown inline below instead.
+  if (isLoading) {
     return (
       <div className="flex justify-center items-center h-screen">
         Loading...
       </div>
     );
-  }
-
-  // Error state
-  if (error) {
-    return <div className="text-red-500 text-center p-4">{error}</div>;
   }
 
   // For creating/updating items
@@ -60,9 +88,8 @@ export default function ItemsPage() {
         // Create new item
         await postWithAuth('/items/', itemData);
       }
-      // Refresh items list
-      const data = await fetchWithAuth('/items/');
-      setItems(data);
+      // Refresh current page
+      await fetchItems();
     } catch (error) {
       console.error("Failed to save item:", error);
       setError("Failed to save item. Please try again.");
@@ -75,8 +102,8 @@ export default function ItemsPage() {
       await fetchWithAuth(`/items/${itemId}`, {
         method: 'DELETE'
       });
-      // Remove item from state
-      setItems(items.filter((item) => item.id !== itemId));
+      // Refresh current page (keeps the total count accurate)
+      await fetchItems();
     } catch (error) {
       console.error("Failed to delete item:", error);
       setError("Failed to delete item. Please try again.");
@@ -90,10 +117,9 @@ export default function ItemsPage() {
   };
 
   const handleTransactionSuccess = async () => {
-    // Refresh items list
+    // Refresh current page
     try {
-      const data = await fetchWithAuth(`/items/?search=${search}`);
-      setItems(data);
+      await fetchItems();
     } catch (error) {
       console.error("Failed to refresh items:", error);
     }
@@ -130,6 +156,11 @@ export default function ItemsPage() {
               />
             </div>
           </div>
+
+          {/* Fetch error (inline, so the page and search box stay mounted) */}
+          {error && (
+            <div className="text-red-400 text-sm text-center py-3">{error}</div>
+          )}
 
           {/* Table */}
           <div className="overflow-x-auto">
@@ -221,6 +252,46 @@ export default function ItemsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Loading / empty states (inline — page stays mounted) */}
+          {loading && items.length === 0 && (
+            <div className="text-center text-gray-400 py-10">Loading…</div>
+          )}
+          {!loading && !error && items.length === 0 && (
+            <div className="text-center text-gray-400 py-10">
+              {debouncedSearch ? "No items match your search." : "No items yet."}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {total > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6">
+              <p className="text-sm text-gray-400">
+                Showing <span className="text-white font-medium">{rangeStart}</span>
+                –<span className="text-white font-medium">{rangeEnd}</span> of{" "}
+                <span className="text-white font-medium">{total}</span> items
+              </p>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="px-4 py-2 rounded-lg bg-white bg-opacity-10 text-white text-sm hover:bg-opacity-20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-gray-300 px-2">
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => (rangeEnd < total ? p + 1 : p))}
+                  disabled={rangeEnd >= total}
+                  className="px-4 py-2 rounded-lg bg-purple-600 text-white text-sm hover:bg-purple-700 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
