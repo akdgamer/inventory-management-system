@@ -54,8 +54,10 @@ class UserUpdate(BaseModel):
 
 class UserSchema(UserBase):
     id: int
-    created_at: datetime
-    last_login: Optional[datetime]
+    # Tolerant of NULL: some legacy rows were seeded without a created_at, and a
+    # required datetime here makes the whole /users/ response fail to serialize.
+    created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
     role: RoleSchema
 
     class Config:
