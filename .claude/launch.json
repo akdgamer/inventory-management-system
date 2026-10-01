@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ims-backend (local SQLite)",
+      "runtimeExecutable": "C:/Users/nancy/AppData/Local/Temp/claude/D--Projects-inventory-management-system/8e02605c-e2e0-4551-a241-c41888538ca5/scratchpad/venv/Scripts/python.exe",
+      "runtimeArgs": ["C:/Users/nancy/AppData/Local/Temp/claude/D--Projects-inventory-management-system/8e02605c-e2e0-4551-a241-c41888538ca5/scratchpad/local-run/run_backend.py"],
+      "port": 8000
+    },
+    {
+      "name": "ims-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "ims-frontend"],
+      "port": 5173
+    }
+  ]
+}
